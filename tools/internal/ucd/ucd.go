@@ -233,7 +233,7 @@ func ScalarsToString(field string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("ucd: parsing hex scalar %q: %w", token, err)
 		}
-		if code > maxScalar || (code >= firstSurrogate && code <= lastSurrogate) {
+		if code < 0 || code > maxScalar || (code >= firstSurrogate && code <= lastSurrogate) {
 			return "", fmt.Errorf("ucd: %q is not a valid Unicode scalar value", token)
 		}
 		builder.WriteRune(rune(code))

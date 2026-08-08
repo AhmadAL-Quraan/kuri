@@ -49,14 +49,21 @@ func TestLoadNfcUnicodeDataSkipsCompatibilityDecomposition(t *testing.T) {
 }
 
 func TestLoadNfcUnicodeDataSkipsShortLines(t *testing.T) {
-	// A line with fewer than six fields (e.g. blank) must be skipped without error.
-	data := []byte("\n0041;A;Lu;0;L;;;;;N;;;;;\n")
+	// A line with fewer than six fields (e.g. blank) must be skipped without error,
+	// and the real record after it must still be processed. Using a fixture whose
+	// real record contributes both a non-zero CCC and a canonical decomposition
+	// means the assertion actually confirms the record was parsed, rather than
+	// merely being consistent with it having been dropped too.
+	data := []byte("\n00C0;LATIN CAPITAL LETTER A WITH GRAVE;Lu;230;L;0041 0300;;;;N;;;;;\n")
 	ccc, decomposition, err := loadNfcUnicodeData(data)
 	if err != nil {
 		t.Fatalf("loadNfcUnicodeData: unexpected error: %v", err)
 	}
-	if len(ccc) != 0 || len(decomposition) != 0 {
-		t.Errorf("ccc=%v decomposition=%v, want both empty for this single-real-record fixture", ccc, decomposition)
+	if ccc[0xC0] != 230 {
+		t.Errorf("ccc[0xC0] = %d, want 230 (blank line skipped, real record processed)", ccc[0xC0])
+	}
+	if len(decomposition[0xC0]) != 2 || decomposition[0xC0][0] != 0x41 || decomposition[0xC0][1] != 0x300 {
+		t.Errorf("decomposition[0xC0] = %v, want [0x41, 0x300]", decomposition[0xC0])
 	}
 }
 
@@ -78,6 +85,24 @@ func TestLoadNfcUnicodeDataInvalidDecompositionTarget(t *testing.T) {
 	data := []byte("00C0;A WITH GRAVE;Lu;0;L;ZZZZ 0300;;;;N;;;;;\n")
 	if _, _, err := loadNfcUnicodeData(data); err == nil {
 		t.Fatal("loadNfcUnicodeData with an invalid decomposition target: expected error, got nil")
+	}
+}
+
+func TestParseHexTokensAcceptsOutOfRangeAndSurrogate(t *testing.T) {
+	// Documents a deliberate discrepancy with ScalarsToString: parseHexTokens
+	// validates hex syntax only, so an out-of-range or surrogate decomposition
+	// target is accepted rather than rejected. See the doc comment on
+	// parseHexTokens for why this is intentional (the real corpus never
+	// contains such values here) rather than an oversight.
+	data := []byte("00C0;A WITH GRAVE;Lu;0;L;110000 D800;;;;N;;;;;\n")
+	_, decomposition, err := loadNfcUnicodeData(data)
+	if err != nil {
+		t.Fatalf("loadNfcUnicodeData: unexpected error: %v", err)
+	}
+	want := []int{0x110000, 0xD800}
+	got := decomposition[0xC0]
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("decomposition[0xC0] = %v, want %v (out-of-range/surrogate targets accepted)", got, want)
 	}
 }
 

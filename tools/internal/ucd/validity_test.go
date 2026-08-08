@@ -27,6 +27,27 @@ func TestLoadValidityUnicodeDataMarkAndVirama(t *testing.T) {
 	}
 }
 
+func TestLoadValidityUnicodeDataSkipsShortLines(t *testing.T) {
+	// A line with fewer than four fields must be skipped without a panic on the
+	// fields[fieldCCC] access, mirroring loadNfcUnicodeData and loadBidiUnicodeData.
+	// 094D (DEVANAGARI SIGN VIRAMA) is category Mn (a mark) and CCC 9 (Virama), so
+	// the real record after the short line must land in both sets.
+	data := []byte(
+		"0041\n" +
+			"094D;DEVANAGARI SIGN VIRAMA;Mn;9;NSM;;;;;N;;;;;\n",
+	)
+	marks, viramas, err := loadValidityUnicodeData(data)
+	if err != nil {
+		t.Fatalf("loadValidityUnicodeData: unexpected error: %v", err)
+	}
+	if len(marks) != 1 || marks[0].start != 0x94D {
+		t.Fatalf("marks = %+v, want a single range at 0x94D (short line skipped)", marks)
+	}
+	if len(viramas) != 1 || viramas[0].start != 0x94D {
+		t.Fatalf("viramas = %+v, want a single range at 0x94D (short line skipped)", viramas)
+	}
+}
+
 func TestLoadValidityUnicodeDataFirstLastBlock(t *testing.T) {
 	// A <..., First>/<..., Last> block must expand to cover every code point in
 	// the enclosed run, taking its category/CCC from the Last (closing) row.
@@ -133,20 +154,6 @@ func TestMergeSetRangesMergesTouchingAndOverlapping(t *testing.T) {
 	}
 }
 
-func TestMergeSetRangesSeparatedByOneMerges(t *testing.T) {
-	// mergeSetRanges' adjacency test is current.start <= merged.end+1, so a range
-	// separated from the previous by exactly one code point (a single-point gap)
-	// should still merge.
-	in := []plainRange{
-		{start: 0, end: 5},
-		{start: 6, end: 10},
-	}
-	got := mergeSetRanges(in)
-	if len(got) != 1 || got[0].start != 0 || got[0].end != 10 {
-		t.Fatalf("mergeSetRanges = %+v, want a single merged [0, 10]", got)
-	}
-}
-
 func TestMergeSetRangesNoMergeWithGap(t *testing.T) {
 	in := []plainRange{
 		{start: 0, end: 5},
@@ -166,6 +173,49 @@ func TestMergeTypedRangesMergesSameType(t *testing.T) {
 	got := mergeTypedRanges(in)
 	if len(got) != 1 || got[0].end != 10 {
 		t.Fatalf("mergeTypedRanges = %+v, want a single merged range ending at 10", got)
+	}
+}
+
+func TestMergeTypedRangesSortTiebreakersAndContainment(t *testing.T) {
+	// Exercises the sort comparator's equal-start tiebreaker (falls through to
+	// comparing end), equal-end tiebreaker (falls through to comparing jtype),
+	// and the containment branch (a range fully inside the one already merged).
+	in := []typedRange{
+		{start: 0, end: 20, jtype: "L"},  // same start as next, larger end
+		{start: 0, end: 10, jtype: "L"},  // same start as prev, smaller end
+		{start: 5, end: 8, jtype: "L"},   // fully contained in [0,20] once merged
+		{start: 30, end: 40, jtype: "R"}, // same end as next, different jtype
+		{start: 30, end: 40, jtype: "L"},
+	}
+	got := mergeTypedRanges(in)
+	if len(got) != 3 {
+		t.Fatalf("mergeTypedRanges = %+v, want 3 merged records", got)
+	}
+	if got[0].start != 0 || got[0].end != 20 || got[0].jtype != "L" {
+		t.Errorf("got[0] = %+v, want [0,20] L (containment must not shrink the merged end)", got[0])
+	}
+	// The two [30,40] ranges have different jtypes, so — despite sharing the same
+	// start and end — they must remain separate records, sorted by jtype ("L" < "R").
+	if got[1].start != 30 || got[1].end != 40 || got[1].jtype != "L" {
+		t.Errorf("got[1] = %+v, want [30,40] L", got[1])
+	}
+	if got[2].start != 30 || got[2].end != 40 || got[2].jtype != "R" {
+		t.Errorf("got[2] = %+v, want [30,40] R", got[2])
+	}
+}
+
+func TestToPlainConvertsRanges(t *testing.T) {
+	got := toPlain([]plainRange{{start: 1, end: 2}, {start: 5, end: 9}})
+	want := []PlainRange{{Start: 1, End: 2}, {Start: 5, End: 9}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("toPlain = %+v, want %+v", got, want)
+	}
+}
+
+func TestToTypedConvertsRanges(t *testing.T) {
+	got := toTyped([]typedRange{{start: 1, end: 2, jtype: "L"}})
+	if len(got) != 1 || got[0].Start != 1 || got[0].End != 2 || got[0].Type != "L" {
+		t.Fatalf("toTyped = %+v, want a single [1,2] L record", got)
 	}
 }
 

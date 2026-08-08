@@ -113,15 +113,10 @@ func TestScalarsToStringAllWhitespace(t *testing.T) {
 	}
 }
 
-func TestScalarsToStringRejectsSurrogate(t *testing.T) {
-	// D800 is the first UTF-16 high surrogate; it is not a valid scalar value and
-	// must not silently become U+FFFD via WriteRune.
-	if _, err := ScalarsToString("D800"); err == nil {
-		t.Fatal("ScalarsToString(\"D800\"): expected error for surrogate code point, got nil")
-	}
-}
-
 func TestScalarsToStringRejectsSurrogateBoundaries(t *testing.T) {
+	// D800 is the first UTF-16 high surrogate; it (and the rest of the surrogate
+	// block) is not a valid scalar value and must not silently become U+FFFD via
+	// WriteRune.
 	for _, tok := range []string{"D800", "DFFF", "DC00"} {
 		if _, err := ScalarsToString(tok); err == nil {
 			t.Fatalf("ScalarsToString(%q): expected error for surrogate code point, got nil", tok)
@@ -144,6 +139,18 @@ func TestScalarsToStringRejectsOutOfRange(t *testing.T) {
 	// The maximum valid scalar itself must be accepted.
 	if _, err := ScalarsToString("10FFFF"); err != nil {
 		t.Fatalf("ScalarsToString(\"10FFFF\"): unexpected error: %v", err)
+	}
+}
+
+func TestScalarsToStringRejectsNegative(t *testing.T) {
+	// strconv.ParseInt accepts a leading '-', so without an explicit lower-bound
+	// check a negative token would sail past the (code > maxScalar) guard and
+	// WriteRune would silently fold it to U+FFFD — exactly what the doc comment
+	// promises can't happen.
+	for _, tok := range []string{"-1", "-0041"} {
+		if _, err := ScalarsToString(tok); err == nil {
+			t.Fatalf("ScalarsToString(%q): expected error for negative scalar, got nil", tok)
+		}
 	}
 }
 
@@ -254,6 +261,68 @@ func TestRepoRootFindsMarker(t *testing.T) {
 	}
 	if gotResolved != wantResolved {
 		t.Fatalf("repoRoot() = %q, want %q", gotResolved, wantResolved)
+	}
+}
+
+func TestJoiningPathPrefersExtracted(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, rootMarker), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, ".claude", "references", unicodeVersionDir)
+	extractedDir := filepath.Join(dir, "extracted")
+	if err := os.MkdirAll(extractedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	extracted := filepath.Join(extractedDir, "DerivedJoiningType.txt")
+	topLevel := filepath.Join(dir, "DerivedJoiningType.txt")
+	for _, p := range []string{extracted, topLevel} {
+		if err := os.WriteFile(p, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(root)
+	got, err := joiningPath()
+	if err != nil {
+		t.Fatalf("joiningPath: unexpected error: %v", err)
+	}
+	if got != extracted {
+		t.Fatalf("joiningPath() = %q, want the extracted/ copy %q", got, extracted)
+	}
+}
+
+func TestJoiningPathFallsBackToTopLevel(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, rootMarker), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, ".claude", "references", unicodeVersionDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Only the top-level file exists — no extracted/ subdirectory at all.
+	topLevel := filepath.Join(dir, "DerivedJoiningType.txt")
+	if err := os.WriteFile(topLevel, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	got, err := joiningPath()
+	if err != nil {
+		t.Fatalf("joiningPath: unexpected error: %v", err)
+	}
+	if got != topLevel {
+		t.Fatalf("joiningPath() = %q, want the top-level fallback %q", got, topLevel)
+	}
+}
+
+func TestJoiningPathNeitherExists(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, rootMarker), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	if _, err := joiningPath(); err == nil {
+		t.Fatal("joiningPath: expected error when neither candidate exists, got nil")
 	}
 }
 

@@ -109,6 +109,14 @@ func TestParseLineInvalidCodeRange(t *testing.T) {
 	}
 }
 
+func TestParseLineMissingSeparator(t *testing.T) {
+	// A non-blank, non-comment line with no ';' field separator at all must
+	// return an error rather than panic on the fields[1] access below.
+	if _, err := parseLine("0041"); err == nil {
+		t.Fatal("parseLine with no ';' separator: expected error, got nil")
+	}
+}
+
 func TestLoadRangesGapFreeCoverage(t *testing.T) {
 	// A tiny, gap-free, three-range fixture covering the entire code-point space
 	// via a single "10FFFF..10FFFF"-adjacent final record would be unwieldy to
